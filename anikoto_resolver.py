@@ -6,6 +6,7 @@ Resolves anime titles or MyAnimeList (MAL) IDs to internal numeric Anikoto IDs
 used for generating stream/embed URLs.
 
 Features:
+- Dual Metadata Provider: AniList GraphQL API (Primary, sub-100ms, zero 504 timeouts) + Jikan API (Fallback).
 - Exhaustive Multi-Query Variant Search (English, Romaji, Synonyms, Base Titles).
 - Advanced Multi-Factor Scoring (Similarity + Season/Part checks + Year/Type weights).
 - Resilient Rate-Limiting Retries (429 Too Many Requests backoff + Retry-After headers).
@@ -14,7 +15,7 @@ Features:
 
 Usage (CLI):
     python anikoto_resolver.py 44511
-    python anikoto_resolver.py 44511 --debug
+    python anikoto_resolver.py 40746 --debug
     python anikoto_resolver.py --titles "Chainsaw Man" --year 2022 --json
 
 Usage (Python Import - No Jikan Dependency):
@@ -22,7 +23,7 @@ Usage (Python Import - No Jikan Dependency):
     result = resolve_from_titles(["Chainsaw Man"], year=2022, anime_type="TV")
     print(result["internal_id"])
 
-Usage (Python Import - Hits Jikan):
+Usage (Python Import - Hits AniList/Jikan):
     from anikoto_resolver import resolve
     result = resolve(44511)
     print(result["internal_id"])
@@ -237,7 +238,7 @@ class AnikotoResolver:
         Uses AniList GraphQL API as primary (sub-100ms, zero 504 Gateway Timeouts),
         with Jikan API as secondary fallback.
         """
-        # 1. Primary: AniList GraphQL API
+        # 1. Primary: AniList GraphQL API (Fast, Cloudflare-backed, zero 504 Gateway Timeouts)
         try:
             query = """
             query ($id: Int) {
