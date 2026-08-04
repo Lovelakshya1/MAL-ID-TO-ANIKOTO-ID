@@ -52,6 +52,7 @@ DEFAULT_HEADERS = {
     "Referer": "https://anikoto.cz/",
 }
 
+ANILIST_GRAPHQL_URL = "https://graphql.anilist.co"
 JIKAN_URL = "https://api.jikan.moe/v4/anime/{}"
 SEARCH_URL = "https://anikoto.cz/ajax/anime/search"
 WATCH_URL = "https://anikoto.cz/watch/{}"
@@ -231,28 +232,83 @@ class AnikotoResolver:
         self._cache: Dict[str, Dict[str, Any]] = {}
 
     def get_mal_titles(self, mal_id: int) -> Dict[str, Any]:
-        resp = self.client.get(JIKAN_URL.format(mal_id))
-        if resp.status_code != 200:
-            raise JikanAPIError(f"Jikan API responded with status {resp.status_code} for MAL ID {mal_id}")
+        """
+        Fetch title variants & metadata for MAL ID.
+        Uses AniList GraphQL API as primary (sub-100ms, zero 504 Gateway Timeouts),
+        with Jikan API as secondary fallback.
+        """
+        # 1. Primary: AniList GraphQL API
+        try:
+            query = """
+            query ($id: Int) {
+              Media(idMal: $id, type: ANIME) {
+                title { romaji english native }
+                synonyms
+                startDate { year }
+                format
+              }
+            }
+            """
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
+            resp = self.client.session.post(
+                ANILIST_GRAPHQL_URL,
+                json={"query": query, "variables": {"id": mal_id}},
+                headers=headers,
+                timeout=8
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("data", {}).get("Media")
+                if data:
+                    titles = set()
+                    t_obj = data.get("title", {})
+                    if t_obj.get("romaji"): titles.add(t_obj["romaji"])
+                    if t_obj.get("english"): titles.add(t_obj["english"])
+                    for syn in data.get("synonyms", []):
+                        if syn: titles.add(syn)
+                    titles.discard(None)
+                    
+                    year = data.get("startDate", {}).get("year")
+                    fmt = data.get("format")
+                    
+                    if titles:
+                        return {
+                            "titles": list(titles),
+                            "primary": t_obj.get("romaji") or t_obj.get("english") or list(titles)[0],
+                            "year": year,
+                            "type": TYPE_ALIASES.get(fmt, fmt)
+                        }
+        except Exception as e:
+            sys.stderr.write(f"[AnikotoResolver WARNING] AniList lookup failed for MAL {mal_id}: {e}, falling back to Jikan...\n")
 
-        data = resp.json().get("data")
-        if not data:
-            raise JikanAPIError(f"No Jikan data payload returned for MAL ID {mal_id}")
+        # 2. Secondary Fallback: Jikan API
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
+            resp = self.client.session.get(JIKAN_URL.format(mal_id), headers=headers, timeout=10)
+            if resp.status_code != 200:
+                raise JikanAPIError(f"Jikan API responded with status {resp.status_code} for MAL ID {mal_id}")
 
-        titles = {data.get("title"), data.get("title_english")}
-        for entry in data.get("titles", []):
-            titles.add(entry.get("title"))
-        titles.discard(None)
+            data = resp.json().get("data")
+            if not data:
+                raise JikanAPIError(f"No Jikan data payload returned for MAL ID {mal_id}")
 
-        if not titles:
-            raise JikanAPIError(f"No usable titles returned by Jikan for MAL ID {mal_id}")
+            titles = {data.get("title"), data.get("title_english")}
+            for entry in data.get("titles", []):
+                titles.add(entry.get("title"))
+            titles.discard(None)
 
-        return {
-            "titles": list(titles),
-            "primary": data.get("title"),
-            "year": data.get("year"),
-            "type": TYPE_ALIASES.get(data.get("type"), data.get("type")),
-        }
+            if not titles:
+                raise JikanAPIError(f"No usable titles returned by Jikan for MAL ID {mal_id}")
+
+            return {
+                "titles": list(titles),
+                "primary": data.get("title"),
+                "year": data.get("year"),
+                "type": TYPE_ALIASES.get(data.get("type"), data.get("type")),
+            }
+        except JikanAPIError:
+            raise
+        except Exception as e:
+            raise JikanAPIError(f"Failed to fetch metadata from Jikan API for MAL ID {mal_id}: {e}")
 
     def search_candidates(self, titles: List[str]) -> List[Dict[str, Any]]:
         variants = generate_query_variants(titles)
