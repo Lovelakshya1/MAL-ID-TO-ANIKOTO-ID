@@ -1,10 +1,16 @@
 """
-Vercel Serverless Function Handler for Anikoto Resolver.
+Vercel Serverless Endpoint: /api and /
 """
 
+import sys
+import os
+import json
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
-import json
+
+# Ensure root directory is in sys.path for Vercel Python runtime
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from anikoto_resolver import resolve, resolve_from_titles, AnikotoError
 
 
@@ -42,8 +48,9 @@ class handler(BaseHTTPRequestHandler):
                 )
             else:
                 result = {
-                    "error": "Missing parameter. Usage: /api/resolve?id=44511 or /api/resolve?title=Chainsaw+Man",
-                    "endpoints": {
+                    "service": "Anikoto Resolver API",
+                    "status": "online",
+                    "usage": {
                         "by_mal_id": "/api/resolve?id=44511",
                         "by_title": "/api/resolve?title=Chainsaw+Man&year=2022"
                     }
