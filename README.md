@@ -125,7 +125,7 @@ python -m unittest discover -s tests
 
 ## 👤 Author & Credits
 
-- **Author**: **[lovelakshya](https://github.com/lovelakshya)**
+- **Author**: **[lovelakshya](https://github.com/lovelakshya1)**
 - **Development**: Developed and built with AI assistance (Advanced Agentic Coding).
 
 ---
