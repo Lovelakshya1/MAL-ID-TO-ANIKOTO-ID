@@ -1,0 +1,20 @@
+# Python Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution & Build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
