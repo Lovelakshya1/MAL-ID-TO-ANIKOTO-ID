@@ -2,11 +2,7 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/api/resolve",
-      "destination": "/api/resolve.py"
-    },
-    {
-      "source": "/api",
+      "source": "/(.*)",
       "destination": "/api/index.py"
     }
   ]
