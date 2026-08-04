@@ -20,4 +20,4 @@ dependencies = [
 anikoto-resolver = "anikoto_resolver.cli:main"
 
 [tool.vercel]
-entrypoint = "api.index:handler"
+entrypoint = "anikoto_resolver.api.index:handler"
