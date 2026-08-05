@@ -1,5 +1,5 @@
 """
-Exhaustive Multi-Query Search Module for Anikoto.cz
+Exhaustive Multi-Query Search Module for Anikoto.cz (AJAX + Filter Page Dual Search)
 """
 
 import re
@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from .client import HttpClient
 
 SEARCH_URL = "https://anikoto.cz/ajax/anime/search"
+FILTER_URL = "https://anikoto.cz/filter"
 
 
 def generate_query_variants(titles: List[str]) -> List[str]:
@@ -88,7 +89,63 @@ def search_anikoto_single_query(client: HttpClient, query: str) -> List[Dict[str
                 "slug": slug,
                 "year": year,
                 "type": type_,
-                "query": query
+                "query": query,
+                "source": "ajax"
+            })
+
+        return results
+    except Exception:
+        return []
+
+
+def search_anikoto_filter_query(client: HttpClient, query: str) -> List[Dict[str, Any]]:
+    """Performs a search against Anikoto's full filter page (/filter?keyword=...) to fetch all results beyond AJAX limits."""
+    try:
+        response = client.get(FILTER_URL, params={"keyword": query})
+        if response.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        list_items = soup.find("div", id="list-items")
+        if not list_items:
+            return []
+
+        results: List[Dict[str, Any]] = []
+
+        for div in list_items.find_all("div", class_="item"):
+            a_tag = div.find("a", class_="d-title") or div.find("a", href=True)
+            if not a_tag:
+                continue
+
+            href = a_tag.get("href", "")
+            if "/watch/" not in href:
+                continue
+
+            slug = href.split("/watch/")[-1].split("/")[0]
+            title = a_tag.text.strip()
+
+            year: Any = None
+            type_: Any = None
+            meta_div = div.find("div", class_="meta")
+            if meta_div:
+                for m_item in meta_div.find_all("div", class_="m-item"):
+                    lbl = m_item.find("label")
+                    if lbl:
+                        txt = lbl.text.strip()
+                        if txt in {"TV", "Movie", "OVA", "ONA", "Special", "TV_SHORT"}:
+                            type_ = txt
+
+            m_year = re.search(r'\b(19\d\d|20\d\d)\b', div.text)
+            if m_year:
+                year = int(m_year.group(1))
+
+            results.append({
+                "title": title,
+                "slug": slug,
+                "year": year,
+                "type": type_,
+                "query": query,
+                "source": "filter"
             })
 
         return results
@@ -98,18 +155,23 @@ def search_anikoto_single_query(client: HttpClient, query: str) -> List[Dict[str
 
 def search_anikoto_exhaustive(client: HttpClient, titles: List[str]) -> List[Dict[str, Any]]:
     """
-    Runs multi-variant search queries to collect and deduplicate candidate anime entries.
+    Runs multi-variant search queries across both AJAX suggestions and Full Filter Page results.
     """
     variants = generate_query_variants(titles)
     candidates_by_slug: Dict[str, Dict[str, Any]] = {}
 
     for query in variants:
-        # Skip pure non-ASCII strings if other variants exist
         if not any(ord(char) < 128 for char in query):
             continue
 
-        query_results = search_anikoto_single_query(client, query)
-        for candidate in query_results:
+        # 1. AJAX quick search
+        for candidate in search_anikoto_single_query(client, query):
+            slug = candidate["slug"]
+            if slug not in candidates_by_slug:
+                candidates_by_slug[slug] = candidate
+
+        # 2. Filter page search (captures all results beyond top 5)
+        for candidate in search_anikoto_filter_query(client, query):
             slug = candidate["slug"]
             if slug not in candidates_by_slug:
                 candidates_by_slug[slug] = candidate
