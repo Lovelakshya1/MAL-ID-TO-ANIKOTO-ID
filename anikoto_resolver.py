@@ -6,7 +6,6 @@ Resolves anime titles or MyAnimeList (MAL) IDs to internal numeric Anikoto IDs
 used for generating stream/embed URLs.
 
 Features:
-- Dual Metadata Provider: AniList GraphQL API (Primary, sub-100ms, zero 504 timeouts) + Jikan API (Fallback).
 - Exhaustive Multi-Query Variant Search (English, Romaji, Synonyms, Base Titles).
 - Advanced Multi-Factor Scoring (Similarity + Season/Part checks + Year/Type weights).
 - Resilient Rate-Limiting Retries (429 Too Many Requests backoff + Retry-After headers).
@@ -15,7 +14,7 @@ Features:
 
 Usage (CLI):
     python anikoto_resolver.py 44511
-    python anikoto_resolver.py 40746 --debug
+    python anikoto_resolver.py 44511 --debug
     python anikoto_resolver.py --titles "Chainsaw Man" --year 2022 --json
 
 Usage (Python Import - No Jikan Dependency):
@@ -23,7 +22,7 @@ Usage (Python Import - No Jikan Dependency):
     result = resolve_from_titles(["Chainsaw Man"], year=2022, anime_type="TV")
     print(result["internal_id"])
 
-Usage (Python Import - Hits AniList/Jikan):
+Usage (Python Import - Hits Jikan):
     from anikoto_resolver import resolve
     result = resolve(44511)
     print(result["internal_id"])
@@ -238,7 +237,7 @@ class AnikotoResolver:
         Uses AniList GraphQL API as primary (sub-100ms, zero 504 Gateway Timeouts),
         with Jikan API as secondary fallback.
         """
-        # 1. Primary: AniList GraphQL API (Fast, Cloudflare-backed, zero 504 Gateway Timeouts)
+        # 1. Primary: AniList GraphQL API
         try:
             query = """
             query ($id: Int) {
@@ -319,44 +318,64 @@ class AnikotoResolver:
             if not any(ord(c) < 128 for c in query):
                 continue
 
+            # 1. AJAX search suggestions
             try:
                 response = self.client.get(SEARCH_URL, params={"keyword": query})
-                if response.status_code != 200:
-                    continue
+                if response.status_code == 200:
+                    html_content = response.json().get("result", {}).get("html", "")
+                    if html_content:
+                        soup = BeautifulSoup(html_content, "html.parser")
+                        for a_tag in soup.find_all("a", class_="item"):
+                            href = a_tag.get("href", "")
+                            if "/watch/" not in href: continue
+                            slug = href.split("/watch/")[-1].split("/")[0]
+                            name_div = a_tag.find("div", class_="name")
+                            title = name_div.text.strip() if name_div else slug
 
-                html_content = response.json().get("result", {}).get("html", "")
-                if not html_content:
-                    continue
+                            year, type_ = None, None
+                            meta_div = a_tag.find("div", class_="meta")
+                            if meta_div:
+                                for span in meta_div.find_all("span", class_="dot"):
+                                    text = span.text.strip()
+                                    if text.isdigit() and len(text) == 4: year = int(text)
+                                    elif text in {"TV", "Movie", "OVA", "ONA", "Special"}: type_ = text
 
-                soup = BeautifulSoup(html_content, "html.parser")
-                for a_tag in soup.find_all("a", class_="item"):
-                    href = a_tag.get("href", "")
-                    if "/watch/" not in href:
-                        continue
-
-                    slug = href.split("/watch/")[-1].split("/")[0]
-                    name_div = a_tag.find("div", class_="name")
-                    title = name_div.text.strip() if name_div else slug
-
-                    year, type_ = None, None
-                    meta_div = a_tag.find("div", class_="meta")
-                    if meta_div:
-                        for span in meta_div.find_all("span", class_="dot"):
-                            text = span.text.strip()
-                            if text.isdigit() and len(text) == 4:
-                                year = int(text)
-                            elif text in {"TV", "Movie", "OVA", "ONA", "Special"}:
-                                type_ = text
-
-                    if slug not in candidates_by_slug:
-                        candidates_by_slug[slug] = {
-                            "title": title,
-                            "slug": slug,
-                            "year": year,
-                            "type": type_
-                        }
+                            if slug not in candidates_by_slug:
+                                candidates_by_slug[slug] = {"title": title, "slug": slug, "year": year, "type": type_}
             except Exception:
-                continue
+                pass
+
+            # 2. Filter search page (captures all results beyond top 5)
+            try:
+                response = self.client.get("https://anikoto.cz/filter", params={"keyword": query})
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    list_items = soup.find("div", id="list-items")
+                    if list_items:
+                        for div in list_items.find_all("div", class_="item"):
+                            a_tag = div.find("a", class_="d-title") or div.find("a", href=True)
+                            if not a_tag: continue
+                            href = a_tag.get("href", "")
+                            if "/watch/" not in href: continue
+                            slug = href.split("/watch/")[-1].split("/")[0]
+                            title = a_tag.text.strip()
+
+                            year, type_ = None, None
+                            meta_div = div.find("div", class_="meta")
+                            if meta_div:
+                                for m_item in meta_div.find_all("div", class_="m-item"):
+                                    lbl = m_item.find("label")
+                                    if lbl:
+                                        txt = lbl.text.strip()
+                                        if txt in {"TV", "Movie", "OVA", "ONA", "Special", "TV_SHORT"}: type_ = txt
+
+                            m_year = re.search(r'\b(19\d\d|20\d\d)\b', div.text)
+                            if m_year: year = int(m_year.group(1))
+
+                            if slug not in candidates_by_slug:
+                                candidates_by_slug[slug] = {"title": title, "slug": slug, "year": year, "type": type_}
+            except Exception:
+                pass
 
         return list(candidates_by_slug.values())
 
